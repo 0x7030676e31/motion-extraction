@@ -15,7 +15,9 @@ const FS_WIDTH: usize = 1920;
 const FS_HEIGHT: usize = 1080;
 
 const FPS: u32 = 30;
-const BUFFER_SIZE: usize = 7;
+
+const CHANNEL_OFFSET: usize = 4;
+const BUFFER_SIZE: usize = 2 + 2 * CHANNEL_OFFSET;
 
 fn capture_thread(tx_capture: SyncSender<Frame>, rx_close: Receiver<()>) -> thread::JoinHandle<()> {
     let config = Config {
@@ -67,11 +69,18 @@ fn decode_thread(
             let pixels = decoder.decode().expect("Failed to decode JPEG");
 
             decode_buf_u32.clear();
-            for chunk in pixels.chunks_exact(3) {
+            for (idx, chunk) in pixels.chunks_exact(3).enumerate() {
                 let r = chunk[0] as u32;
                 let g = chunk[1] as u32;
                 let b = chunk[2] as u32;
-                decode_buf_u32.push((r << 16) | (g << 8) | b);
+
+                let row = (idx + WIDTH - 1) / WIDTH + 1;
+                if decode_buf_u32.len() < row * WIDTH {
+                    decode_buf_u32.extend_from_slice(&vec![0u32; WIDTH]);
+                }
+
+                let index = row * WIDTH - (idx % WIDTH) - 1;
+                decode_buf_u32[index] = (r << 16) | (g << 8) | b;
             }
 
             let pixels = mem::replace(&mut decode_buf_u32, Vec::with_capacity(WIDTH * HEIGHT));
@@ -113,6 +122,10 @@ fn main() {
     .expect("Failed to create window");
 
     while window.is_open() {
+        if window.is_key_released(Key::Escape) {
+            break;
+        }
+
         if window.is_key_released(Key::F11) {
             fullscreen = !fullscreen;
 
@@ -129,13 +142,16 @@ fn main() {
                     resize: !fullscreen,
                     borderless: fullscreen,
                     scale: Scale::FitScreen,
+                    topmost: fullscreen,
                     ..Default::default()
                 },
             )
             .expect("Failed to create window");
 
             if !fullscreen {
-                window.set_position(position.0, position.1);
+                window.set_position(position.0 - 4, position.1 - 46);
+            } else {
+                window.set_cursor_visibility(false);
             }
         }
 
@@ -152,8 +168,8 @@ fn main() {
         let length = back_buffer.len();
         let newest = &back_buffer[length - 1];
         let frame_r = &back_buffer[length.saturating_sub(2)];
-        let frame_g = &back_buffer[length.saturating_sub(4)];
-        let frame_b = &back_buffer[length.saturating_sub(6)];
+        let frame_g = &back_buffer[length.saturating_sub(2 + CHANNEL_OFFSET)];
+        let frame_b = &back_buffer[length.saturating_sub(2 + CHANNEL_OFFSET + CHANNEL_OFFSET)];
 
         diff_buf.par_iter_mut().enumerate().for_each(|(i, pixel)| {
             let p = newest[i];
